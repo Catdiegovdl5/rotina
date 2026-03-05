@@ -1,0 +1,8 @@
+# Arquivos temporários e logs
+historico_agente.txt
+__pycache__/
+*.pyc
+
+# Configurações sensíveis (opcional, mas recomendado se o utilizador for partilhar o repo)
+# Se o utilizador quiser manter o token no GitHub (não recomendado), pode comentar estas linhas:
+# tracker.py (Apenas se quiseres esconder o teu Token privado!)

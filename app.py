@@ -2,6 +2,7 @@ import customtkinter as ctk
 from PIL import Image
 import zipfile
 import io
+from database import LibraryDB
 
 class ReadEraClone(ctk.CTk):
     def __init__(self):
@@ -10,6 +11,10 @@ class ReadEraClone(ctk.CTk):
         self.title("Meu ReadEra PC - MVP")
         self.geometry("800x900")
         ctk.set_appearance_mode("dark")
+
+        # Configuração do Banco de Dados
+        self.db = LibraryDB()
+        self.current_file_path = ""
 
         # Variáveis de controle
         self.pages = []
@@ -35,6 +40,17 @@ class ReadEraClone(ctk.CTk):
         # Atalhos de teclado
         self.bind("<Right>", lambda e: self.next_page())
         self.bind("<Left>", lambda e: self.prev_page())
+
+        # Evento de redimensionamento da janela
+        self.bind("<Configure>", lambda e: self._on_resize(e))
+        self._resize_timer = None
+
+    def _on_resize(self, event):
+        # Evita chamar show_page repetidamente enquanto redimensiona (debounce)
+        if event.widget == self:
+            if self._resize_timer is not None:
+                self.after_cancel(self._resize_timer)
+            self._resize_timer = self.after(100, self.show_page)
 
     def open_file(self):
         file_path = ctk.filedialog.askopenfilename(filetypes=[("Comic Book Archive", "*.cbz")])
@@ -63,6 +79,7 @@ class ReadEraClone(ctk.CTk):
             return None
 
     def load_cbz(self, path):
+        self.current_file_path = path
         self.pages = []
 
         # Opcional: Extrair e guardar a capa (preparação para a Estante)
@@ -76,12 +93,21 @@ class ReadEraClone(ctk.CTk):
                 img_data = z.read(file)
                 self.pages.append(Image.open(io.BytesIO(img_data)))
 
-        self.current_page = 0
+        # Recupera onde parou do banco de dados
+        self.current_page = self.db.get_progress(path)
+        # Proteção caso a página atual salva seja maior que o número de páginas por algum motivo
+        if self.current_page >= len(self.pages):
+             self.current_page = 0
+
         self.show_page()
 
     def show_page(self):
         if not self.pages:
             return
+
+        # Salva no banco sempre que mudar de página ou exibir a atual
+        if self.current_file_path:
+            self.db.save_progress(self.current_file_path, self.current_page, len(self.pages))
 
         # Redimensionar imagem para caber na tela mantendo proporção
         img = self.pages[self.current_page]

@@ -4,6 +4,7 @@ import zipfile
 import io
 import os
 import hashlib
+import fitz  # PyMuPDF
 from database import LibraryDB
 
 # Garantir que a pasta de cache de capas exista
@@ -152,87 +153,128 @@ class ReadEraClone(ctk.CTk):
     def open_book_from_shelf(self, path):
         """Abre um livro diretamente da estante e muda para o leitor."""
         if os.path.exists(path):
-            self.load_cbz(path)
+            self.load_file(path)
         else:
             # Livro não encontrado (foi movido ou apagado)
             # Em uma versão completa, poderíamos perguntar se o usuário quer remover da estante
             print(f"Arquivo não encontrado: {path}")
 
     def show_reader(self):
-        """Alterna para a tela do Leitor."""
+        """Alterna para a tela do Leitor e exibe a página atual."""
         self.shelf_frame.pack_forget()
         self.reader_frame.pack(expand=True, fill="both")
+        self.show_page()
 
     def open_file(self):
-        file_path = ctk.filedialog.askopenfilename(filetypes=[("Comic Book Archive", "*.cbz")])
+        file_path = ctk.filedialog.askopenfilename(
+            filetypes=[("Livros e HQs", "*.cbz *.pdf"), ("Todos os arquivos", "*.*")]
+        )
         if file_path:
-            self.load_cbz(file_path)
+            self.load_file(file_path)
 
     def extract_cover(self, path):
-        """Extrai a primeira imagem de um arquivo CBZ para servir como capa."""
+        """Extrai a primeira imagem de um arquivo CBZ ou a primeira página de um PDF para servir como capa."""
         try:
-            with zipfile.ZipFile(path, 'r') as z:
-                # Filtra e ordena as imagens
-                file_list = sorted([f for f in z.namelist() if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))])
+            ext = path.lower()
+            if ext.endswith((".cbz", ".zip")):
+                with zipfile.ZipFile(path, 'r') as z:
+                    # Filtra e ordena as imagens
+                    file_list = sorted([f for f in z.namelist() if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))])
 
-                if not file_list:
+                    if not file_list:
+                        return None
+
+                    # Pega a primeira imagem e converte para Image do Pillow
+                    cover_data = z.read(file_list[0])
+                    cover_img = Image.open(io.BytesIO(cover_data))
+
+            elif ext.endswith(".pdf"):
+                doc = fitz.open(path)
+                if len(doc) == 0:
                     return None
+                page = doc.load_page(0)
+                # Extrai a capa em baixa resolução para thumbnail (matrix 1.0)
+                pix = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+                cover_img = Image.open(io.BytesIO(pix.tobytes("png")))
+                doc.close()
+            else:
+                return None
 
-                # Pega a primeira imagem e converte para Image do Pillow
-                cover_data = z.read(file_list[0])
-                cover_img = Image.open(io.BytesIO(cover_data))
-
-                # Gera uma miniatura para a capa
-                cover_img.thumbnail((200, 300), Image.Resampling.LANCZOS)
-                return cover_img
+            # Gera uma miniatura para a capa
+            cover_img.thumbnail((200, 300), Image.Resampling.LANCZOS)
+            return cover_img
         except Exception as e:
-            print(f"Erro ao extrair capa: {e}")
+            print(f"Erro ao extrair capa de {path}: {e}")
             return None
 
-    def load_cbz(self, path):
-        self.current_file_path = path
-        self.pages = []
-
-        # Gerar o caminho do cache da capa
-        filename = os.path.basename(path)
-        # Usa um MD5 do caminho do arquivo para garantir um nome de arquivo de cache
-        # único e consistente entre diferentes execuções do programa.
-        path_hash = hashlib.md5(path.encode('utf-8')).hexdigest()
-        cache_filename = f"{path_hash}.jpg"
-        cover_path = os.path.join("covers", cache_filename)
-
-        # Se a capa ainda não existe no cache, extrai e salva
-        if not os.path.exists(cover_path):
-            cover_img = self.extract_cover(path)
-            if cover_img:
-                # Converte para RGB se necessário (ex: PNG com fundo transparente)
-                if cover_img.mode in ("RGBA", "P"):
-                    cover_img = cover_img.convert("RGB")
-                cover_img.save(cover_path, format="JPEG", quality=85)
-            else:
-                cover_path = None # Não tem capa
-
+    def _load_cbz_pages(self, path):
         with zipfile.ZipFile(path, 'r') as z:
-            # Filtra apenas arquivos de imagem e ordena alfabeticamente
             file_list = sorted([f for f in z.namelist() if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))])
-
             for file in file_list:
                 img_data = z.read(file)
                 self.pages.append(Image.open(io.BytesIO(img_data)))
 
-        # Recupera onde parou do banco de dados
+    def _load_pdf_pages(self, path):
+        try:
+            doc = fitz.open(path)
+            # Define o zoom da página renderizada. 2.0 = 2x mais resolução que o original.
+            matrix = fitz.Matrix(2.0, 2.0)
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                pix = page.get_pixmap(matrix=matrix)
+                img_data = pix.tobytes("png")
+                self.pages.append(Image.open(io.BytesIO(img_data)))
+            doc.close()
+        except Exception as e:
+            print(f"Erro ao extrair PDF de {path}: {e}")
+
+    def load_file(self, path):
+        self.current_file_path = path
+        self.pages = []
+
+        # 1. Verifica se já temos a capa salva, se não, extrai e guarda no cache local
+        existing_books = self.db.get_all_books()
+        book_data = next((b for b in existing_books if b[0] == path), None)
+
+        # A capa está no índice 3 (path, current_page, total_pages, cover_path)
+        cover_path = book_data[3] if book_data and len(book_data) > 3 else None
+
+        if not cover_path or not os.path.exists(cover_path):
+            file_hash = hashlib.md5(path.encode('utf-8')).hexdigest()
+            cover_path = os.path.join("covers", f"{file_hash}.jpg")
+
+            cover_img = self.extract_cover(path)
+            if cover_img:
+                if cover_img.mode in ("RGBA", "P"):
+                    cover_img = cover_img.convert("RGB")
+                cover_img.save(cover_path, "JPEG", quality=85)
+            else:
+                cover_path = None
+
+        # 2. Carrega as páginas usando o motor adequado
+        ext = path.lower()
+        if ext.endswith((".cbz", ".zip")):
+            self._load_cbz_pages(path)
+        elif ext.endswith(".pdf"):
+            self._load_pdf_pages(path)
+        else:
+            print(f"Formato não suportado: {ext}")
+            return
+
+        if not self.pages:
+            print("Nenhuma página encontrada no arquivo.")
+            return
+
+        # 3. Recupera onde parou do banco de dados
         self.current_page = self.db.get_progress(path)
-        # Proteção caso a página atual salva seja maior que o número de páginas por algum motivo
         if self.current_page >= len(self.pages):
              self.current_page = 0
 
-        # Mostra o leitor e renderiza a página
-        self.show_reader()
-
-        # Força um primeiro salvamento para garantir que o cover_path vá pro banco mesmo se o usuário não mudar de página
+        # Salva (ou atualiza) os metadados do livro no banco (incluindo o caminho da capa)
         self.db.save_progress(self.current_file_path, self.current_page, len(self.pages), cover_path=cover_path)
 
-        self.show_page()
+        # Mostra o leitor (que agora chama show_page() por conta própria)
+        self.show_reader()
 
     def show_page(self):
         if not self.pages:

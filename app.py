@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageOps, ImageEnhance
 import zipfile
 import io
 import os
@@ -50,6 +50,16 @@ class ReadEraClone(ctk.CTk):
 
         self.btn_back = ctk.CTkButton(self.reader_header, text="< Voltar para Estante", width=120, command=self.show_shelf)
         self.btn_back.pack(side="left", padx=5, pady=5)
+
+        # Controles de Filtro de Cor (Modo de Leitura)
+        self.color_mode = ctk.StringVar(value="Padrão")
+        self.mode_selector = ctk.CTkSegmentedButton(
+            self.reader_header,
+            values=["Padrão", "Sépia", "Noturno"],
+            variable=self.color_mode,
+            command=lambda v: self.show_page()
+        )
+        self.mode_selector.pack(side="right", padx=10, pady=5)
 
         # Interface - Área de exibição da imagem
         self.canvas_label = ctk.CTkLabel(self.reader_frame, text="Carregando imagem...", text_color="gray")
@@ -276,6 +286,25 @@ class ReadEraClone(ctk.CTk):
         # Mostra o leitor (que agora chama show_page() por conta própria)
         self.show_reader()
 
+    def apply_filters(self, img):
+        """Aplica filtros de cor (Sépia/Noturno) na imagem com base na escolha do usuário."""
+        mode = self.color_mode.get()
+        if mode == "Padrão":
+            return img
+
+        # Converte para RGB para garantir que os filtros do ImageOps funcionem
+        img = img.convert("RGB")
+
+        if mode == "Noturno":
+            return ImageOps.invert(img)
+
+        elif mode == "Sépia":
+            # Aplica uma colorização usando tons de sépia eficientes
+            # Preto vira marrom escuro, branco vira um bege claro
+            return ImageOps.colorize(ImageOps.grayscale(img), "#402010", "#F4ECD8")
+
+        return img
+
     def show_page(self):
         if not self.pages:
             return
@@ -284,21 +313,21 @@ class ReadEraClone(ctk.CTk):
         if self.current_file_path:
             self.db.save_progress(self.current_file_path, self.current_page, len(self.pages))
 
-        # Redimensionar imagem para caber na tela mantendo proporção
+        # Obtém a imagem original, faz uma cópia e aplica os filtros escolhidos
         img = self.pages[self.current_page]
+        img_copy = self.apply_filters(img.copy())
 
         # Lógica simples de redimensionamento
         canvas_width = self.winfo_width() - 40
         canvas_height = self.winfo_height() - 150
 
-        # To handle cases where winfo_width/height are initially 1
+        # Para lidar com os casos onde a janela ainda está inicializando (tamanho 1x1)
         if canvas_width <= 0:
             canvas_width = 800 - 40
         if canvas_height <= 0:
             canvas_height = 900 - 150
 
-        # Create a copy so we don't modify the original image in self.pages
-        img_copy = img.copy()
+        # Redimensiona a imagem filtrada
         img_copy.thumbnail((canvas_width, canvas_height), Image.Resampling.LANCZOS)
 
         ctk_img = ctk.CTkImage(light_image=img_copy, dark_image=img_copy, size=(img_copy.width, img_copy.height))

@@ -78,6 +78,17 @@ class ReadEraClone(ctk.CTk):
         self.bind("<Right>", lambda e: self.next_page())
         self.bind("<Left>", lambda e: self.prev_page())
 
+        # Rolagem do mouse para passar páginas (Windows/Mac/Linux)
+        self.bind("<MouseWheel>", self._on_mousewheel)
+        # Para sistemas Linux usando X11 (ScrollUp/ScrollDown)
+        self.bind("<Button-4>", self._on_mousewheel_linux_up)
+        self.bind("<Button-5>", self._on_mousewheel_linux_down)
+
+        # Tela Cheia
+        self.is_fullscreen = False
+        self.bind("<F11>", self.toggle_fullscreen)
+        self.bind("<Escape>", self.exit_fullscreen)
+
         # Evento de redimensionamento da janela
         self.bind("<Configure>", lambda e: self._on_resize(e))
         self._resize_timer = None
@@ -91,6 +102,33 @@ class ReadEraClone(ctk.CTk):
             if self._resize_timer is not None:
                 self.after_cancel(self._resize_timer)
             self._resize_timer = self.after(100, self.show_page)
+
+    def _on_mousewheel(self, event):
+        """Passa a página usando a rolagem do mouse."""
+        # Apenas processa se estivermos na tela de leitura
+        if self.reader_frame.winfo_ismapped():
+            # event.delta no Windows é 120 para cima, -120 para baixo. No Mac é diferente, mas o sinal se mantém.
+            if event.delta > 0:
+                self.prev_page()
+            elif event.delta < 0:
+                self.next_page()
+
+    def _on_mousewheel_linux_up(self, event):
+        if self.reader_frame.winfo_ismapped():
+            self.prev_page()
+
+    def _on_mousewheel_linux_down(self, event):
+        if self.reader_frame.winfo_ismapped():
+            self.next_page()
+
+    def toggle_fullscreen(self, event=None):
+        self.is_fullscreen = not self.is_fullscreen
+        self.attributes("-fullscreen", self.is_fullscreen)
+
+    def exit_fullscreen(self, event=None):
+        if self.is_fullscreen:
+            self.is_fullscreen = False
+            self.attributes("-fullscreen", False)
 
     def show_shelf(self):
         """Alterna para a tela da Estante."""
